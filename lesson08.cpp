@@ -127,7 +127,7 @@ int main(int argc, char *argv[])
 
 #endif
 	}
-	if (1) {
+	if (0) {
 		Func producer("producer_root_x"), consumer("consumer_root_x");
 		producer(x,y) = sin(x*y);
 		consumer(x,y) = (producer(x,y) + producer(x,y+1) + producer(x+1, y) + producer(x+1,y+1))/4;
@@ -171,7 +171,7 @@ int main(int argc, char *argv[])
 		}
 #endif
 	}
-	if (0) {
+	if (1) {
 		Func producer("producer_tile"), consumer("consumer_tile");
 		producer(x,y) = sin(x*y);
 		consumer(x,y) = (producer(x,y) + producer(x,y+1) + producer(x+1, y) + producer(x+1,y+1))/4;
@@ -179,7 +179,6 @@ int main(int argc, char *argv[])
 		Var xo, yo, xi, yi;
 
 		consumer.tile(x, y, xo, yo, xi, yi, 4, 4);
-
 		producer.compute_at(consumer, xo);
 
 		producer.trace_stores();
@@ -187,7 +186,38 @@ int main(int argc, char *argv[])
 
 		consumer.realize({8, 8});
 		consumer.print_loop_nest();
-		consumer.print_loop_nest();
+
+#ifdef C_EVALUATION
+		float producer_storage[5][5];
+
+		for (int yo = 0; yo < 2; yo++) {
+			for (int xo = 0; xo < 2; xo++) {
+				int yb = yo*4;
+				int xb = xo*4;
+
+				for (int py = yb; py < yb+5; py++) {
+					for (int px = xb; px < xb+5; px++) {
+						producer_storage[py - yb][px - xb] = sinf(px*py);
+						printf("Store producer (%d, %d) = %f\n", px - xb, py - yb, sinf(px*py));
+					}
+				}
+
+				for (int yi = 0; yi < 4; yi++) {
+					for (int xi = 0; xi < 4; xi++) {
+						int x = xb + xi;
+						int y = yb + yi;
+						float consumer = (
+							producer_storage[yi][xi] +
+							producer_storage[yi][xi+1] +
+							producer_storage[yi+1][xi] +
+							producer_storage[yi+1][xi+1]
+								)/4;
+						printf("Evaluate consumer (%d, %d) = %f\n", x, y, consumer);
+					}
+				}
+			}
+		}
+#endif
 	}
 
 }
