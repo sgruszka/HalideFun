@@ -158,7 +158,7 @@ int main(int argc, char *argv[])
 					printf("Store producer (%d, %d) = %f\n", y+1, x, producer_storage[0][x+1]);
 				}
 
-				producer_storage[(y+1) & 1][x+1] = sinf(x*y);
+				producer_storage[(y+1) & 1][x+1] = sinf((x+1)*(y+1));
 				printf("Store producer (%d, %d) = %f\n", x+1, y+1 , producer_storage[(y+1)&1][x+1]);
 
 				float consumer = (producer_storage[y & 1][x] +
