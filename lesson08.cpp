@@ -1,7 +1,8 @@
-#include <Halide.h>
+#include <cstdint>
 #include <stdio.h>
 #include <cmath>
-// #include "halide_image_io.h"
+#include <Halide.h>
+#include "halide_image_io.h"
 // #
 
 #define C_EVALUATION 1
@@ -171,7 +172,7 @@ int main(int argc, char *argv[])
 		}
 #endif
 	}
-	if (1) {
+	if (0) {
 		Func producer("producer_tile"), consumer("consumer_tile");
 		producer(x,y) = sin(x*y);
 		consumer(x,y) = (producer(x,y) + producer(x,y+1) + producer(x+1, y) + producer(x+1,y+1))/4;
@@ -219,5 +220,28 @@ int main(int argc, char *argv[])
 		}
 #endif
 	}
+	if (1) {
+		Func producer("producer"), consumer("consumer");
+		producer(x,y) = sin(x*y);
+		consumer(x,y) = (producer(x,y) + producer(x,y+1) + producer(x+1, y) + producer(x+1,y+1))/4;
 
+		Var yi, yo;
+
+		consumer.split(y, yo, yi, 16);
+		consumer.parallel(yo);
+		consumer.vectorize(x, 4);
+
+		producer.store_at(consumer, yo);
+		producer.compute_at(consumer, yi);
+		producer.vectorize(x, 4);
+
+		Buffer<float> res = consumer.realize({160, 160});
+
+		Func out;
+		float factor = 255.0/2.0;
+		out(x,y) = cast<uint8_t>(factor*(res(x,y) + 1.0f));
+
+		Buffer<uint8_t> out_buf = out.realize({res.width(), res.height()});
+		Tools::save_image(out_buf, "out.png");
+	}
 }
