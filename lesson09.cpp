@@ -10,13 +10,41 @@
 
 using namespace Halide;
 
+#define C_EVALUATION 1
+
+template <typename T, int N>
+void compare_results_1d(Buffer<T> halide_result, T (&c_result)[N])
+{
+	for (int x = 0; x < N; x++) {
+		if (halide_result(x) != c_result[x]) {
+			printf("halide_result(%d) = %d instead of %d\n",
+				x, halide_result(x), c_result[x]);
+			exit(-1);
+		}
+	}
+}
+
+template <typename T, int W, int H>
+void compare_results_2d(Buffer<int> halide_result, T (&c_result)[H][W])
+{
+	for (int y = 0; y < H; y++) {
+	for (int x = 0; x < W; x++) {
+		if (halide_result(x,y) != c_result[y][x]) {
+			printf("halide_result(%d, %d) = %d instead of %d\n",
+				x, y, halide_result(x), c_result[y][x]);
+			exit(-1);
+		}
+	}
+	}
+}
+
 int main(int argc, char *argv[])
 {
 	printf("%s\n", __func__);
 	Var x("x"), y("y");
 
 	Buffer<uint8_t> in_buf = Tools::load_image("images/gray.png");
-	{
+	if (0) {
 		Func f("f");
 		f(x,y) = x + y;
 
@@ -37,7 +65,7 @@ int main(int argc, char *argv[])
 		g.realize({4, 4});
 	}
 
-	{
+	if (0) {
 		Func f("f");
 		f(x,y) = (x+y) / 100.0f;
 		RDom r(0, 50);
@@ -45,7 +73,7 @@ int main(int argc, char *argv[])
 		Buffer<float> res = f.realize({100, 100});
 	}
 
-	{ // Histogram
+	if (0) { // Histogram
 		Func hist("hist");
 		RDom r(0, in_buf.width(), 0, in_buf.height());
 		hist(x) = 0;
@@ -53,7 +81,8 @@ int main(int argc, char *argv[])
 
 		Buffer<int> res = hist.realize({256});
 	}
-	{ // Schedule update steps
+	// Schedule update steps
+	if (0) {
 		Func f("f");
 		f(x,y) = x*y;
 		f(x,0) = f(x,8);
@@ -111,21 +140,211 @@ int main(int argc, char *argv[])
 		}
 #endif
 	}
-	{
+	// Reduction (update with function itself as input) in producer-consumer on producer
+	if (0) {
+		Func consumer("consumer"), producer("producer");
+		producer(x) = x*2;
+		producer(x) += 10;
+		consumer(x) = 2*producer(x);
+
+		// producer.trace_stores();
+		// producer.trace_loads();
+		// consumer.trace_stores();
+		// consumer.trace_loads();
+
+		producer.compute_at(consumer, x);
+
+		Buffer<int> halide_result = consumer.realize({10});
+#ifdef C_EVALUATION
+		int c_result[10];
+		for (int x = 0; x < 10; x++) {
+			int producer_storage[1];
+
+			producer_storage[0] = x*2;
+			producer_storage[0] += 10;  // update step for producer
+
+			c_result[x] = 2*producer_storage[0];
+		}
+
+		for (int x = 0; x < 10; x++) {
+			if (halide_result(x) != c_result[x]) {
+				printf("halide_result(%d) = %d instead of %d\n",
+					x, halide_result(x), c_result[x]);
+				return -1;
+			}
+		}
+#endif
+	}
+	// Reduction in producer-consumer on consumer
+	if (1) {
 		Func consumer("consumer"), producer("producer");
 		producer(x) = x*17;
-		consumer(x) = producer(x)*2;
+		consumer(x) = 2*producer(x);
 		consumer(x) += 50;
+
+		// producer.trace_stores();
+		// producer.trace_loads();
+		// consumer.trace_stores();
+		// consumer.trace_loads();
+
+		producer.compute_at(consumer, x);
+
+		Buffer<int> halide_result = consumer.realize({10});
+#ifdef C_EVALUATION
+		int c_result[10];
+		for (int x = 0; x < 10; x++) {
+			int producer_storage[1];
+			producer_storage[0] = x*17;
+
+			c_result[x] = 2*producer_storage[0];
+		}
+		for (int x = 0; x < 10; x++) {
+			c_result[x] += 50;
+
+		}
+
+		compare_results_1d(halide_result, c_result);
+#endif
+	}
+
+	// The consumer references the producer in the update step only
+	if (0) {
+		Func producer("producer"), consumer("consumer");
+		producer(x) = x * 17;
+		consumer(x) = 100 - x * 10;
+		consumer(x) += producer(x);
+
+		producer.compute_at(consumer, x);
+
+		Buffer<int> halide_result = consumer.realize({10});
+#ifdef C_EVALUATION
+		int c_result[10];
+		for (int x = 0; x < 10; x++) {
+			c_result[x] = 100 - x*10;
+		}
+		for (int x = 0; x < 10; x++) {
+			int producer_storage[1];
+			producer_storage[0] = x * 17;
+			c_result[x] += producer_storage[0];
+		}
+
+		compare_results_1d(halide_result, c_result);
+#endif
+	}
+
+        // Case 3: The consumer references the producer in multiple steps that share common variables
+	if (0) {
+		Func producer("producer"), consumer("consumer");
+		producer(x) = x * 17;
+		consumer(x) = 170 - producer(x);
+		consumer(x) += producer(x) / 2;
+
+		producer.store_root().compute_at(consumer, x);
 
 		producer.trace_stores();
 		producer.trace_loads();
 		consumer.trace_stores();
 		consumer.trace_loads();
 
-		producer.compute_at(consumer, x);
-		consumer.realize({10});
+		Buffer<int> halide_result = consumer.realize({5});
+
+#ifdef C_EVALUATION
+		int c_result[5];
+		int producer_storage[5];
+		for (int x = 0; x < 5; x++) {
+			int producer_storage[1];
+			producer_storage[x] = x*17;
+			c_result[x] = 170 - producer_storage[x];
+		}
+		for (int x = 0; x < 5; x++) {
+			c_result[x] += producer_storage[x] / 2;
+		}
+		compare_results_1d(halide_result, c_result);
+#endif
 	}
 
+	if (0) {
+		// Case 4: The consumer references the producer in
+		// multiple steps that do not share common variables
+		Func producer("producer"), consumer("consumer");
+		producer(x, y) = (x * y) / 10 + 8;
+		// consumer(x, y) = x + y;
+		// consumer(x, 0) += producer(x, x);
+		// consumer(0, y) += producer(y, 9 - y);
 
+		// Attempt 2:
+		Func producer_1, producer_2, consumer_2;
+		producer_1(x, y) = producer(x, y);
+		producer_2(x, y) = producer(x, y);
 
+		consumer_2(x, y) = x + y;
+		consumer_2(x, 0) += producer_1(x, x);
+		consumer_2(0, y) += producer_2(y, 9 - y);
+
+		// The wrapper functions give us two separate handles on
+		// the producer, so we can schedule them differently.
+		producer_1.compute_at(consumer_2, x);
+		producer_2.compute_at(consumer_2, y);
+
+		Buffer<int> halide_result = consumer_2.realize({10, 10});
+#ifdef C_EVALUATION
+		int c_result[10][10];
+
+		for (int x = 0; x < 10; x++) {
+			for (int y = 0; y < 10; y++) {
+				c_result[y][x] = x + y;
+			}
+		}
+
+		for (int x = 0; x < 10; x++) {
+			int producer_1_storage[1][1];
+			producer_1_storage[0][0] = (x*x)  /10 + 8;
+			c_result[0][x] += producer_1_storage[0][0];
+		}
+
+		for (int y = 0; y < 10; y++) {
+			int producer_2_storage[1][1];
+			producer_2_storage[0][0] = (y*(9-y)) / 10 + 8;
+			c_result[y][0] +=  producer_2_storage[0][0];
+		}
+		compare_results_2d(halide_result, c_result);
+#endif
+	}
+
+	if (1) {
+	        // Case 5: Scheduling a producer under a reduction domain
+		// variable of the consumer.
+		Func producer("producer"), consumer("consumer");
+		RDom r(0, 5);
+
+		producer(x) = x % 8;
+		consumer(x) = x + 10;
+		consumer(x) += r + producer(x + r);
+
+		producer.compute_at(consumer, r);
+
+		Buffer<int> halide_result = consumer.realize({10});
+#ifdef C_EVALUATION
+		int c_result[10];
+
+		for (int x = 0; x < 10; x++) {
+			c_result[x] = x + 10;
+		}
+
+		for (int x = 0; x < 10; x++) {
+			for (int r = 0; r < 5; r++) {
+				int producer_storage[1];
+				producer_storage[0] = (x+r) % 8;
+				c_result[x] += r + producer_storage[0];
+			}
+		}
+
+		compare_results_1d(halide_result, c_result);
+
+#endif
+	}
+
+	if (1) {
+		// A real-world example of a reduction inside a producer-consumer chain
+	}
 }
