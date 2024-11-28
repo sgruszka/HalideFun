@@ -1,4 +1,5 @@
 #include <Halide.h>
+#include <climits>
 #include <stdio.h>
 
 #ifdef __SSE2__
@@ -25,7 +26,7 @@ void compare_results_1d(Buffer<T> halide_result, T (&c_result)[N])
 }
 
 template <typename T, int W, int H>
-void compare_results_2d(Buffer<int> halide_result, T (&c_result)[H][W])
+void compare_results_2d(Buffer<T> halide_result, T (&c_result)[H][W])
 {
 	for (int y = 0; y < H; y++) {
 	for (int x = 0; x < W; x++) {
@@ -38,12 +39,48 @@ void compare_results_2d(Buffer<int> halide_result, T (&c_result)[H][W])
 	}
 }
 
+template <typename T>
+void compare_results_buffer(Buffer<T> halide_result, Buffer<T> c_result, int w, int h)
+{
+	for (int y = 0; y < h; y++) {
+	for (int x = 0; x < w; x++) {
+		if (halide_result(x,y) != c_result(x,y)) {
+			printf("halide_result(%d, %d) = %d instead of %d\n",
+				x, y, halide_result(x), c_result(x, y));
+			exit(-1);
+		}
+	}
+	}
+}
+
+/*
+void scale()  {
+		int b_min = INT_MAX;
+		int b_max = INT_MIN;
+		for (int y = 0; y < in.height(); y++) {
+			for (int x = 0; x < in.width(); x++) {
+				if (halide_result(x, y) < b_min)
+					b_min = halide_result(x,y);
+				if (halide_result(x, y) > b_max)
+					b_max = halide_result(x,y);
+			}
+		}
+		printf("MAX %d MIN %d\n", b_max, b_min);
+		// max_val(0) = maximum(spread(0 + all.x, 0 + all.y));
+		// Buffer<int> b_max = max_val.realize({1});
+		Func out;
+		float factor = 255.0/(b_max - b_min);
+		out(x,y) = cast<uint8_t>(factor*(halide_result(x,y) - b_min));
+		Buffer<uint8_t> out_buf = out.realize({in.width(), in.height()});
+		Tools::save_image(out_buf, "out.png");
+}
+*/
+
 int main(int argc, char *argv[])
 {
 	printf("%s\n", __func__);
 	Var x("x"), y("y");
 
-	Buffer<uint8_t> in_buf = Tools::load_image("images/gray.png");
 	if (0) {
 		Func f("f");
 		f(x,y) = x + y;
@@ -74,6 +111,7 @@ int main(int argc, char *argv[])
 	}
 
 	if (0) { // Histogram
+		Buffer<uint8_t> in_buf = Tools::load_image("images/gray.png");
 		Func hist("hist");
 		RDom r(0, in_buf.width(), 0, in_buf.height());
 		hist(x) = 0;
@@ -311,7 +349,7 @@ int main(int argc, char *argv[])
 #endif
 	}
 
-	if (1) {
+	if (0) {
 	        // Case 5: Scheduling a producer under a reduction domain
 		// variable of the consumer.
 		Func producer("producer"), consumer("consumer");
@@ -346,5 +384,133 @@ int main(int argc, char *argv[])
 
 	if (1) {
 		// A real-world example of a reduction inside a producer-consumer chain
+		Buffer<uint8_t> in_buf = Tools::load_image("images/gray.png");
+		Func claped = BoundaryConditions::repeat_edge(in_buf);
+
+		// 5x5 Box , started at (-2, -2)
+		RDom r(-2, 5, -2, 5);
+
+		Func local_sum;
+		local_sum(x,y) = 0;
+		local_sum(x,y) += claped(x + r.x, y + r.y);
+
+		Func blurry;
+		blurry(x,y) = cast<uint8_t>(local_sum(x,y) / 25);
+
+		Buffer<uint8_t> halide_result = blurry.realize({in_buf.width(), in_buf.height()});
+#ifdef C_EVALUATION
+		Buffer<uint8_t> c_result(in_buf.width(), in_buf.height());
+
+		for (int y = 0; y < in_buf.height(); y++) {
+			for (int x = 0; x < in_buf.width(); x++) {
+				int local_sum[1];
+
+				local_sum[0] = 0;
+				for (int ry = -2; ry < -2 + 5; ry++) {
+					for (int rx = -2; rx < -2 + 5; rx++) {
+						int clamped_x = std::min(std::max(x + rx, 0), in_buf.width() - 1);
+						int clamped_y = std::min(std::max(y + ry, 0), in_buf.height() - 1);
+						local_sum[0] += in_buf(clamped_x, clamped_y);
+					}
+				}
+
+				c_result(x,y) = (uint8_t) (local_sum[0]/25);
+			}
+		}
+
+		compare_results_buffer(halide_result, c_result, in_buf.width(), in_buf.height());
+#endif
+	}
+
+	if (1) {
+		// Reduction helpers.
+		RDom r(0, 100);
+
+		Func f1;
+		f1(x) = sum(x + r) * 7;
+
+		Func f2;
+		Func anon;
+
+		anon(x) = 0;
+		anon(x) += r + x;
+		f2(x) = anon(x) * 7;
+
+		Buffer<int> halide_result1 = f1.realize({10});
+		Buffer<int> halide_result2 = f2.realize({10});
+#ifdef C_EVALUATION
+		int c_result[10];
+
+		for (int x = 0; x < 10; x++) {
+			int anon[1];
+			anon[0] = 0;
+			for (int r = 0; r < 100; r++) {
+				anon[0] += r + x;
+			}
+
+			c_result[x] = anon[0]*7;
+		}
+
+		compare_results_1d(halide_result1, c_result);
+		compare_results_1d(halide_result2, c_result);
+#endif
+	}
+
+	if (1) {
+		// A complex example that uses reduction helpers.
+		Buffer<uint8_t> in = Tools::load_image("images/gray.png");
+		Func clamped;
+		Expr x_clamped = clamp(x, 0, in.width() - 1);
+		Expr y_clamped = clamp(y, 0, in.height() - 1);
+
+		clamped(x,y) = in(x_clamped, y_clamped);
+
+		RDom box(-2, 5, -2, 5);
+		// Compute the local maximum minus the local minimum
+		Func spread;
+		spread(x, y) = (maximum(clamped(x + box.x, y + box.y)) -
+				minimum(clamped(x + box.x, y + box.y)));
+
+		// Compute the result in strips of 32 scanlines
+		Var yo, yi;
+
+		spread.split(y, yo, yi, 32).parallel(yo);
+		spread.vectorize(x, 16);
+
+		clamped.store_at(spread, yo).compute_at(spread, yi);
+		Buffer<uint8_t> halide_result = spread.realize({in.width(), in.height()});
+
+#ifdef __SSE2__
+		printf("I have sse2\n");
+#ifdef _OPENMP
+		printf("I have openmp\n");
+		double t1 = current_time();
+#endif
+
+#ifdef C_EVALUATION
+		int W = in.width();
+		int H = in.height();
+		Buffer<uint8_t> c_result(W, H);
+
+		for (int y = 0; y < H; y++) {
+			for (int x = 0; x < W; x++) {
+				int b_min = INT_MAX;
+				int b_max = INT_MIN;
+				for (int ry = -2; ry < 5; ry++) {
+				for (int rx = -2; rx < 5; rx++) {
+					int yc = std::clamp(y + ry, 0, H - 1);
+					int xc = std::clamp(x + rx, 0, W - 1);
+					if (in(xc, yc) > b_max)
+						b_max = in(xc, yc);
+					if (in(xc, yc) < b_min)
+						b_min = in(xc, yc);
+				}
+				}
+
+				c_result(x,y) = b_max - b_min;
+			}
+		}
+#endif
+#endif
 	}
 }
