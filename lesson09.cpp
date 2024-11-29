@@ -492,25 +492,66 @@ int main(int argc, char *argv[])
 		int H = in.height();
 		Buffer<uint8_t> c_result(W, H);
 
-		for (int y = 0; y < H; y++) {
-			for (int x = 0; x < W; x++) {
-				int b_min = INT_MAX;
-				int b_max = INT_MIN;
-				for (int ry = -2; ry < 5; ry++) {
-				for (int rx = -2; rx < 5; rx++) {
-					int yc = std::clamp(y + ry, 0, H - 1);
-					int xc = std::clamp(x + rx, 0, W - 1);
-					if (in(xc, yc) > b_max)
-						b_max = in(xc, yc);
-					if (in(xc, yc) < b_min)
-						b_min = in(xc, yc);
-				}
+		for (int yo = 0; yo < (H + 31) / 32; yo++) {
+			int y_base = std::min(yo * 32, H - 32);
+
+			int clamped_width = (W + 4);
+			uint8_t clamped_storage[clamped_width * 8];
+
+			for (int yi = 0; yi < 32; yi++) {
+				int y = y_base + yi;
+
+				uint8_t *output_row = &c_result(0, y);
+
+				int min_y_clamped = (yi == 0) ? y - 2 : y + 2;
+				int max_y_clamped = y + 2;
+
+				for (int cy = min_y_clamped; cy <= max_y_clamped; cy++) {
+					uint8_t *clamped_row = clamped_storage + (cy & 7) * clamped_width;
+					int clamped_y = std::min(std::max(cy, 0), H - 1);
+					uint8_t *input_row = &in(0, clamped_y);
+
+					// Fill it in with the padding.
+					for (int x = -2; x < W + 2; x++) {
+					    int clamped_x = std::min(std::max(x, 0), W-1);
+					    *clamped_row++ = input_row[clamped_x];
+					}
 				}
 
-				c_result(x,y) = b_max - b_min;
+			    for (int x_vec = 0; x_vec < (W + 15) / 16; x_vec++) {
+				int x_base = std::min(x_vec * 16, W - 16);
+
+				__m128i minimum_storage, maximum_storage;
+
+				maximum_storage = _mm_setzero_si128();
+
+				for (int max_y = y - 2; max_y <= y + 2; max_y++) {
+				    uint8_t *clamped_row = clamped_storage + (max_y & 7) * clamped_width;
+				    for (int max_x = x_base - 2; max_x <= x_base + 2; max_x++) {
+					__m128i v = _mm_loadu_si128( (__m128i const *)(clamped_row + max_x + 2));
+					maximum_storage = _mm_max_epu8(maximum_storage, v);
+				    }
+				}
+
+				minimum_storage = _mm_cmpeq_epi32(_mm_setzero_si128(), _mm_setzero_si128());
+
+				for (int min_y = y - 2; min_y <= y + 2; min_y++) {
+				    uint8_t *clamped_row = clamped_storage + (min_y & 7) * clamped_width;
+				    for (int min_x = x_base - 2; min_x <= x_base + 2; min_x++) {
+					__m128i v = _mm_loadu_si128( (__m128i const *)(clamped_row + min_x + 2));
+					minimum_storage = _mm_min_epu8(minimum_storage, v);
+				    }
+				}
+
+				__m128i spread = _mm_sub_epi8(maximum_storage, minimum_storage);
+
+				_mm_storeu_si128((__m128i *)(output_row + x_base), spread);
+
+			    }
 			}
 		}
 #endif
 #endif
+		compare_results_buffer(halide_result, c_result, W, H);
 	}
 }
