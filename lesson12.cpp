@@ -1,5 +1,5 @@
-#include <stdio.h>
 #include <Halide.h>
+#include <stdio.h>
 
 // #include "clock.h"
 #include "halide_image_io.h"
@@ -7,7 +7,8 @@
 using namespace Halide;
 using namespace Halide::Tools;
 
-Target find_gpu_target() {
+Target find_gpu_target()
+{
 	// Start with a target suitable for the machine you're running this on.
 	Target target = get_host_target();
 
@@ -27,18 +28,22 @@ Target find_gpu_target() {
 	return target;
 }
 
-Var x,y,c,i, ii, xo, yo, xi, yi;
+Var x, y, c, i, ii, xo, yo, xi, yi;
 
-class Brighter {
+class Brighter
+{
 public:
 	Func brighter;
 	Buffer<uint8_t> input;
 
-	Brighter(Buffer<uint8_t> in, uint8_t off) : input(in) {
-		brighter(x,y) = clamp(input(x,y) + off, 0, 255);
+	Brighter(Buffer<uint8_t> in, uint8_t off)
+		: input(in)
+	{
+		brighter(x, y) = clamp(input(x, y) + off, 0, 255);
 	}
 
-	void schedule_for_gpu() {
+	void schedule_for_gpu()
+	{
 		Target target = find_gpu_target();
 		assert(target.has_gpu_feature());
 		// Target target = get_host_target();
@@ -56,35 +61,39 @@ public:
 	}
 };
 
-class MyPipeline {
+class MyPipeline
+{
 public:
 	Func lut, padded, padded16, sharpen, curved;
 	Buffer<uint8_t> input;
 
-	MyPipeline(Buffer<uint8_t> in) : input(in) {
+	MyPipeline(Buffer<uint8_t> in)
+		: input(in)
+	{
 		// Define LUT (Look Up Table) - it will be a gamma curve.
 		lut(i) = cast<uint8_t>(clamp(pow(i / 255.0f, 1.2f) * 255.0f, 0, 255));
 		// lut(i) = cast<uint8_t>(i);
 
 		Expr padx = clamp(x, 0, input.width() - 1);
 		Expr pady = clamp(y, 0, input.height() - 1);
-		padded(x,y,c) = input(padx, pady, c);
+		padded(x, y, c) = input(padx, pady, c);
 
-		padded16(x,y,c) = cast<int16_t>(padded(x,y,c));
+		padded16(x, y, c) = cast<int16_t>(padded(x, y, c));
 
 		// Sharp with five-tap filter
-		sharpen(x, y, c) = (padded16(x,y,c)*2) -
-					(padded16(x-1, y, c) +
-					 padded16(x, y-1, c) +
-					 padded16(x+1, y, c) +
-					 padded16(x, y+1, c)/4);
+		sharpen(x, y, c) = (padded16(x, y, c) * 2) -
+				   (padded16(x - 1, y, c) +
+				    padded16(x, y - 1, c) +
+				    padded16(x + 1, y, c) +
+				    padded16(x, y + 1, c) / 4);
 
 		// sharpen(x,y,c) = padded16(x,y,c);
 		// Apply the LUT
-		curved(x, y, c) = lut(sharpen(x,y,c));
+		curved(x, y, c) = lut(sharpen(x, y, c));
 	}
 
-	void schedule_for_cpu() {
+	void schedule_for_cpu()
+	{
 		lut.compute_root();
 
 		// color channels innermost, mark there will be 3 of them and unroll
@@ -104,7 +113,8 @@ public:
 		curved.compile_jit(target);
 	}
 
-	void scheudle_for_gpu() {
+	void scheudle_for_gpu()
+	{
 		Target target = find_gpu_target();
 		assert(target.has_gpu_feature());
 		target.set_feature(Target::Debug);
@@ -131,7 +141,8 @@ public:
 	}
 };
 
-int main() {
+int main()
+{
 	Buffer<uint8_t> input = load_image("images/rgb.png");
 	Buffer<uint8_t> input_gray = load_image("images/gray.png");
 

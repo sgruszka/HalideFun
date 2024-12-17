@@ -1,22 +1,23 @@
-#include <cstdint>
 #include <Halide.h>
+#include <cstdint>
 #include <sys/types.h>
+
 #include "halide_image_io.h"
 
 using namespace Halide::Tools;
 
-int main(int argc, char *argv[]) {
-
+int main(int argc, char *argv[])
+{
 	Halide::Buffer<uint8_t> input = load_image("images/rgb.png");
 	Halide::Func output;
 	// COPY to OUTPUT not working
 	Halide::Var x, y, c;
 	Halide::Expr val = input(x, y, c);
-	output(x, y, c) = Halide::cast<uint8_t>(min(val*3.0f, 255));
+	output(x, y, c) = Halide::cast<uint8_t>(min(val * 3.0f, 255));
 
 	// output(x,y,c) = input(x,y, c);
 	//
-	Halide::Buffer<uint8_t> out = output.realize({input.width(), input.height(), input.channels()});
+	Halide::Buffer<uint8_t> out = output.realize({ input.width(), input.height(), input.channels() });
 
 	// brighter(x, y, c) = Halide::cast<uint8_t>(min(input(x, y, c) * 1.5f, 255));
 	// Halide::Func brighter;
