@@ -2,10 +2,19 @@
 #include <stdio.h>
 
 // #include "clock.h"
+#include "halide_benchmark.h"
 #include "halide_image_io.h"
 
 using namespace Halide;
 using namespace Halide::Tools;
+
+inline double current_time()
+{
+	static auto start_time = Halide::Tools::benchmark_now().time_since_epoch();
+
+	auto now = Halide::Tools::benchmark_now().time_since_epoch() - start_time;
+	return std::chrono::duration_cast<std::chrono::microseconds>(now).count() / 1e3;
+}
 
 Target find_gpu_target()
 {
@@ -46,17 +55,27 @@ public:
 	{
 		Target target = find_gpu_target();
 		assert(target.has_gpu_feature());
-		// Target target = get_host_target();
 
 		target.set_feature(Target::Debug);
 		target.set_feature(Target::VulkanInt8);
+		target.set_feature(Target::VulkanInt16);
+
+		brighter.gpu_tile(x, y, xo, yo, xi, yi, 16, 16);
+		// brighter.compile_jit(target);
+		brighter.compile_jit(target);
+		// brighter.compile_to_lowered_stmt("brighter_schedule.html", {}, Halide::HTML);
+	}
+
+	void schedule_for_cpu()
+	{
+		Target target = get_host_target();
 
 		Var yi, yo;
-		// brighter.split(y, yo, yi, 16).parallel(yo);
+		brighter.split(y, yo, yi, 16).parallel(yo);
 		// brighter.reorder(yi, x, yo);
 		// Var x,y, xo,yo, xi,yi;
 		// brighter.reorder(c,x,y).bound(c, 0, 3).unroll(c);
-		brighter.gpu_tile(x, y, xo, yo, xi, yi, 16, 16);
+		// brighter.tile(x, y, xo, yo, xi, yi, 16, 16);
 		brighter.compile_jit(target);
 	}
 };
@@ -95,6 +114,8 @@ public:
 
 	void schedule_for_cpu()
 	{
+		Target target = get_host_target();
+
 		lut.compute_root();
 
 		// color channels innermost, mark there will be 3 of them and unroll
@@ -110,7 +131,8 @@ public:
 		padded.store_at(curved, yo).compute_at(curved, yi);
 
 		padded.vectorize(x, 16);
-		Target target = get_host_target();
+
+		printf("Target: %s\n", target.to_string().c_str());
 		curved.compile_jit(target);
 	}
 
@@ -118,10 +140,9 @@ public:
 	{
 		Target target = find_gpu_target();
 		assert(target.has_gpu_feature());
-		target.set_feature(Target::Debug);
+		// target.set_feature(Target::Debug);
 		target.set_feature(Target::VulkanInt8);
 		target.set_feature(Target::VulkanInt16);
-		printf("Target %s\n", target.to_string().c_str());
 
 		lut.compute_root();
 
@@ -138,9 +159,68 @@ public:
 		padded.compute_at(curved, xo);
 		padded.gpu_threads(x, y);
 
+		printf("Target: %s\n", target.to_string().c_str());
 		curved.compile_jit(target);
 	}
 };
+
+void test_performance(MyPipeline &p, const Buffer<uint8_t> &input)
+{
+	Buffer<uint8_t> output(input.width(), input.height(), input.channels());
+
+	// Initialize GPU runtime state
+	p.curved.realize(output);
+
+	constexpr int n_inter = 5;
+	double best_time = 0.0;
+	double avg_time = 0.0;
+
+	for (int i = 0; i < n_inter; i++) {
+		double t1 = current_time();
+		for (int j = 0; j < 100; j++)
+			p.curved.realize(output);
+		// Force GPU to finish
+		output.copy_to_host();
+		double t2 = current_time();
+
+		double elapsed = (t2 - t1) / 100;
+		if (i == 0 || elapsed < best_time)
+			best_time = elapsed;
+		avg_time += elapsed;
+	}
+
+	avg_time /= n_inter;
+	printf("Best time %1.4f ms, average time %1.4f ms\n", best_time, avg_time);
+}
+
+void test_performance_grey(Brighter &p, const Buffer<uint8_t> &input)
+{
+	Buffer<uint8_t> output(input.width(), input.height());
+
+	// Initialize GPU runtime state
+	p.brighter.realize(output);
+
+	constexpr int n_inter = 5;
+	double best_time = 0.0;
+	double avg_time = 0.0;
+
+	for (int i = 0; i < n_inter; i++) {
+		double t1 = current_time();
+		for (int j = 0; j < 1000; j++)
+			p.brighter.realize(output);
+		// Force GPU to finish
+		// output.copy_to_host();
+		double t2 = current_time();
+
+		double elapsed = (t2 - t1) / 100;
+		if (i == 0 || elapsed < best_time)
+			best_time = elapsed;
+		avg_time += elapsed;
+	}
+
+	avg_time /= n_inter;
+	printf("Best time %1.4f ms, average time %1.4f ms\n", best_time, avg_time);
+}
 
 int main()
 {
@@ -151,22 +231,39 @@ int main()
 	Buffer<uint8_t> reference_output(input.width(), input.height(), input.channels());
 	Buffer<uint8_t> gpu_output(input.width(), input.height(), input.channels());
 	Buffer<uint8_t> gpu_output_gray(input_gray.width(), input_gray.height());
+	Buffer<uint8_t> cpu_output_gray(input_gray.width(), input_gray.height());
 
+#if 0
 	printf("Running pipeline on CPU\n");
 	MyPipeline p1(input);
 	p1.schedule_for_cpu();
-	p1.curved.realize(reference_output);
-	save_image(reference_output, "out_cpu.png");
+	//p1.curved.realize(reference_output);
+	//save_image(reference_output, "out_cpu.png");
 
 	MyPipeline p2(input);
 	p2.scheudle_for_gpu();
-	p2.curved.realize(gpu_output);
-	save_image(gpu_output, "out_gpu_rbg.png");
+	//p2.curved.realize(gpu_output);
+	//save_image(gpu_output, "out_gpu_rbg.png");
+	
+	printf("Running pipeline on CPU\n");
+	test_performance(p1, reference_output);
+	printf("Running pipeline on GPU\n");
+	test_performance(p2, gpu_output);
+#endif
 
 	// Brighter b(input_gray, 10);
 	// b.schedule_for_gpu();
 	// b.brighter.realize(gpu_output_gray);
 	// save_image(gpu_output_gray, "out_gpu.png");
 
+	Brighter b1(input_gray, 10);
+	b1.schedule_for_cpu();
+	printf("Running gray pipeline on CPU\n");
+	test_performance_grey(b1, gpu_output_gray);
+
+	Brighter b2(input_gray, 10);
+	printf("Running gray pipeline on GPU\n");
+	b2.schedule_for_gpu();
+	test_performance_grey(b2, gpu_output_gray);
 	return 0;
 }
