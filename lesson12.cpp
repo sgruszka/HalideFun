@@ -52,8 +52,8 @@ public:
 		target.set_feature(Target::VulkanInt8);
 
 		Var yi, yo;
-		brighter.split(y, yo, yi, 16).parallel(yo);
-		brighter.reorder(yi, x, yo);
+		// brighter.split(y, yo, yi, 16).parallel(yo);
+		// brighter.reorder(yi, x, yo);
 		// Var x,y, xo,yo, xi,yi;
 		// brighter.reorder(c,x,y).bound(c, 0, 3).unroll(c);
 		brighter.gpu_tile(x, y, xo, yo, xi, yi, 16, 16);
@@ -81,11 +81,12 @@ public:
 		padded16(x, y, c) = cast<int16_t>(padded(x, y, c));
 
 		// Sharp with five-tap filter
-		sharpen(x, y, c) = (padded16(x, y, c) * 2) -
+		sharpen(x, y, c) = padded16(x, y, c) * 2 -
 				   (padded16(x - 1, y, c) +
 				    padded16(x, y - 1, c) +
 				    padded16(x + 1, y, c) +
-				    padded16(x, y + 1, c) / 4);
+				    padded16(x, y + 1, c)) /
+					   4;
 
 		// sharpen(x,y,c) = padded16(x,y,c);
 		// Apply the LUT
@@ -97,7 +98,7 @@ public:
 		lut.compute_root();
 
 		// color channels innermost, mark there will be 3 of them and unroll
-		// curved.reorder(c, x, y).bound(c, 0, 3).unroll(c);
+		curved.reorder(c, x, y).bound(c, 0, 3).unroll(c);
 
 		Var yi, yo;
 		curved.split(y, yo, yi, 16).parallel(yo);
@@ -125,11 +126,11 @@ public:
 		lut.compute_root();
 
 		Var block, thread;
-		lut.split(i, block, thread, 16);
-		lut.gpu_blocks(block).gpu_threads(thread);
-		// lut.gpu_tile(i, block, thread, 16);
+		// lut.split(i, block, thread, 16);
+		// lut.gpu_blocks(block).gpu_threads(thread);
+		lut.gpu_tile(i, block, thread, 16);
 
-		//curved.reorder(c,x,y).bound(c, 0, 3).unroll(c);
+		curved.reorder(c, x, y).bound(c, 0, 3).unroll(c);
 
 		// Compute curved in 2D 8x8 tiles using the GPU.
 		curved.gpu_tile(x, y, xo, yo, xi, yi, 8, 8);
@@ -157,15 +158,15 @@ int main()
 	p1.curved.realize(reference_output);
 	save_image(reference_output, "out_cpu.png");
 
-	// MyPipeline p2(input);
-	// p2.scheudle_for_gpu();
-	// p2.curved.realize(gpu_output);
-	// save_image(gpu_output, "out_gpu.png");
+	MyPipeline p2(input);
+	p2.scheudle_for_gpu();
+	p2.curved.realize(gpu_output);
+	save_image(gpu_output, "out_gpu_rbg.png");
 
-	Brighter b(input_gray, 10);
-	b.schedule_for_gpu();
-	b.brighter.realize(gpu_output_gray);
-	save_image(gpu_output_gray, "out_gpu.png");
+	// Brighter b(input_gray, 10);
+	// b.schedule_for_gpu();
+	// b.brighter.realize(gpu_output_gray);
+	// save_image(gpu_output_gray, "out_gpu.png");
 
 	return 0;
 }
