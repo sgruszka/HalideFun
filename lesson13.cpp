@@ -99,5 +99,63 @@ int main(int argc, char *argv[])
 		assert(arg_max_1 == r1(0));
 	}
 
+	// Tuples for user defined types
+	{
+		struct Complex {
+			Expr real, imag;
+			Complex(Tuple t)
+				: real(t[0]), imag(t[1])
+			{
+			}
+			Complex(Expr r, Expr i)
+				: real(r), imag(i)
+			{
+			}
+			Complex(FuncRef t)
+				: Complex(Tuple(t))
+			{
+			}
+			operator Tuple() const
+			{
+				return { real, imag };
+			}
+			Complex operator+(const Complex &other) const
+			{
+				return { real + other.real, imag + other.imag };
+			}
+			Complex operator*(const Complex &other) const
+			{
+				return { real * other.real, imag * other.imag };
+			}
+			Expr magnitude_squared() const
+			{
+				return real * real + imag * imag;
+			}
+		};
+		Func mandelbrot;
+		Complex initial(x / 15.0f - 2.5f, y / 6.0f - 2.0f);
+		Var t;
+		mandelbrot(x, y, t) = Complex(0.0f, 0.0f);
+		RDom r(1, 12);
+		Complex current = mandelbrot(x, y, r - 1);
+
+		mandelbrot(x, y, r) = current * current + initial;
+
+		Expr escape_condition = Complex(mandelbrot(x, y, r)).magnitude_squared() < 16.0f;
+		Tuple first_escape = argmin(escape_condition);
+
+		Func escape;
+		escape(x, y) = first_escape[0];
+
+		Buffer<int> result = escape.realize({ 61, 25 });
+		const char *code = " .:-~*={}&%#@";
+		for (int y = 0; y < result.height(); y++) {
+			for (int x = 0; x < result.width(); x++) {
+				printf("%c", code[result(x, y)]);
+			}
+			printf("\n");
+		}
+	}
+
 	printf("Done\n");
 }
