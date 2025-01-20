@@ -15,8 +15,7 @@ lesson_10_halide.a: lesson10_generate
 	LD_LIBRARY_PATH=${P}/lib ./lesson10_generate
 
 lesson_10_run: lesson_10_run.cpp lesson_10_halide.a
-	g++ $< lesson_10_halide.a -o $@ -g -I${P}/include/ -I${P}/share/tools/ -L/${P}/lib/ -std=c++17
-
+	g++ $^ -o $@ -g -I${P}/include/ -I${P}/share/tools/ -L/${P}/lib/ -std=c++17
 
 .PHONY: clean
 
