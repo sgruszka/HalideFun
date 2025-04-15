@@ -6,6 +6,16 @@
 
 using namespace Halide;
 
+constexpr int IN_SIZE = 4263168;
+constexpr int IN_STRIDE = 3904;
+constexpr int IN_WIDTH = IN_STRIDE / 2;
+constexpr int IN_HEIGHT = IN_SIZE / IN_STRIDE;
+
+constexpr int OUT_SIZE = 8404032;
+constexpr int OUT_STRIDE = 7696;
+constexpr int OUT_WIDTH = OUT_STRIDE / 4;
+constexpr int OUT_HEIGHT = OUT_SIZE / OUT_STRIDE;
+
 [[maybe_unused]]
 static void diffrent_patterns()
 {
@@ -95,34 +105,27 @@ static void combine_and_save_image(Func r, Func g, Func b)
 	// Scheduling (Optimize for parallel execution)
 	// debayered.parallel(y).vectorize(x, 16);
 
-	constexpr int OUT_SIZE = 8404032;
-	constexpr int OUT_STRIDE = 7696;
-
-	constexpr int W = OUT_STRIDE / 4;
-	constexpr int H = OUT_SIZE / OUT_STRIDE;
-	printf("%d x %d SIZE %d STRIDE %d \n", W, H, OUT_SIZE, OUT_STRIDE);
-	Halide::Buffer<uint8_t> out = debayered.realize({ W, H, 4 });
+	printf("%d x %d OUT_SIZE %d OUT_STRIDE %d \n", OUT_WIDTH, OUT_HEIGHT, OUT_SIZE, OUT_STRIDE);
+	Halide::Buffer<uint8_t> out = debayered.realize({ OUT_WIDTH, OUT_HEIGHT, 4 });
 	// Halide::Buffer<uint8_t> out = debayered.realize({ STRIDE, SIZE / STRIDE });
 	Tools::save_image(out, "OUT_FRAME.png");
 }
 
 int halide_debayer()
 {
-	constexpr int SIZE = 4263168;
-	constexpr int STRIDE = 3904;
+	constexpr int IN_SIZE = 4263168;
+	constexpr int IN_STRIDE = 3904;
 	std::ifstream inputFile("images/INPUT_FRAME", std::ios::in | std::ios::binary);
 
-	const bool dynamic_lut = false;
+	uint16_t *buf = new uint16_t[IN_SIZE / 2];
+	inputFile.read((char *)buf, IN_SIZE);
 
-	uint16_t *buf = new uint16_t[SIZE / 2];
-	inputFile.read((char *)buf, SIZE);
-
-	if (inputFile.gcount() != SIZE) {
-		fprintf(stderr, " Size does not match:  %ld != %d\n", inputFile.gcount(), SIZE);
+	if (inputFile.gcount() != IN_SIZE) {
+		fprintf(stderr, " Size does not match:  %ld != %d\n", inputFile.gcount(), IN_SIZE);
 		return -1;
 	}
 
-	Buffer<uint16_t> input(buf, STRIDE / 2, SIZE / STRIDE);
+	Buffer<uint16_t> input(buf, IN_STRIDE / 2, IN_SIZE / IN_STRIDE);
 
 	Var x("x"), y("y"), c("c");
 	// GRGRGR..
@@ -136,10 +139,12 @@ int halide_debayer()
 	Func red16("red16"), green16("green16"), blue16("blue16");
 	Func raw("raw"), padded16("padded16");
 
-	constexpr int INPUT_W = STRIDE;
-	constexpr int INPUT_H = SIZE / STRIDE;
-	Expr padx = clamp(x, 0, INPUT_W - 1);
-	Expr pady = clamp(y, 0, INPUT_H - 1);
+	// constexpr int INPUT_W = IN_STRIDE ; // HOW THIS WORKED ?
+	// constexpr int INPUT_H = IN_SIZE / IN_STRIDE;
+	// Expr padx = clamp(x, 0, INPUT_W - 1);
+	// Expr pady = clamp(y, 0, INPUT_H - 1);
+	Expr padx = clamp(x, 0, IN_WIDTH - 1);
+	Expr pady = clamp(y, 0, IN_HEIGHT - 1);
 
 	// Red channel
 	padded16(x, y) = cast<uint16_t>(input(padx, pady));
@@ -164,6 +169,7 @@ int halide_debayer()
 
 	Func red("red"), green("green"), blue("blue");
 
+	constexpr bool dynamic_lut = true;
 	if (dynamic_lut) {
 		Func lut;
 		Var i;
@@ -185,12 +191,12 @@ int read_output()
 {
 	std::ifstream inputFile("images/OUTPUT_FRAME", std::ios::in | std::ios::binary);
 
-	constexpr int SIZE = 8404032;
-	constexpr int STRIDE = 7696;
-	uint8_t *buf = new uint8_t[SIZE];
-	inputFile.read((char *)buf, SIZE);
+	// constexpr int SIZE = 8404032;
+	// constexpr int STRIDE = 7696;
+	uint8_t *buf = new uint8_t[OUT_SIZE];
+	inputFile.read((char *)buf, OUT_SIZE);
 
-	if (inputFile.gcount() != SIZE) {
+	if (inputFile.gcount() != OUT_SIZE) {
 		fprintf(stderr, "Size does not match\n");
 		return -1;
 	}
@@ -199,13 +205,13 @@ int read_output()
 	// 		uint8_t *pix = buf + i;
 	// 		printf("%d %d %d", pix[0], pix[1], pix[2]);
 	// 	}
-	constexpr int W = STRIDE / 4;
-	constexpr int H = SIZE / STRIDE;
+	constexpr int W = OUT_WIDTH; //STRIDE / 4;
+	constexpr int H = OUT_HEIGHT; //SIZE / STRIDE;
 	if (0) {
 		Buffer<uint8_t> out1_buf({ W, H, 3 });
 		for (int y = 0; y < H; y++) {
 			for (int x = 0; x < W; x++) {
-				uint8_t *pix = buf + y * STRIDE + x * 4;
+				uint8_t *pix = buf + y * OUT_STRIDE + x * 4;
 				out1_buf(x, y, 0) = pix[0];
 				out1_buf(x, y, 1) = pix[1];
 				out1_buf(x, y, 2) = pix[2];
