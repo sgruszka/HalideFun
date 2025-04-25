@@ -95,26 +95,25 @@ static void combine_and_save_image(Func r, Func g, Func b)
 {
 	Var x, y, c;
 
-	Func debayered("debayered");
+	/* Func debayered("debayered");
 	debayered(x, y, c) = select(
 		c == 0, r(x, y),
 		c == 1, g(x, y),
 		c == 2, b(x, y),
-		255);
+		255); */
 
 	// Scheduling (Optimize for parallel execution)
 	// debayered.parallel(y).vectorize(x, 16);
-
-	printf("%d x %d OUT_SIZE %d OUT_STRIDE %d \n", OUT_WIDTH, OUT_HEIGHT, OUT_SIZE, OUT_STRIDE);
-	Halide::Buffer<uint8_t> out = debayered.realize({ OUT_WIDTH, OUT_HEIGHT, 4 });
+	/*
+	printf("OUT %d x %d OUT_SIZE %d OUT_STRIDE %d \n", OUT_WIDTH, OUT_HEIGHT, OUT_SIZE, OUT_STRIDE);
+	// Halide::Buffer<uint8_t> out = debayered.realize({ OUT_WIDTH, OUT_HEIGHT, 4 });
+	Halide::Buffer<uint8_t> out = debayered.realize({ IN_WIDTH, IN_HEIGHT, 4 });
 	// Halide::Buffer<uint8_t> out = debayered.realize({ STRIDE, SIZE / STRIDE });
-	Tools::save_image(out, "OUT_FRAME.png");
+	Tools::save_image(out, "OUT_FRAME.png"); */
 }
 
 int halide_debayer()
 {
-	constexpr int IN_SIZE = 4263168;
-	constexpr int IN_STRIDE = 3904;
 	std::ifstream inputFile("images/INPUT_FRAME", std::ios::in | std::ios::binary);
 
 	uint16_t *buf = new uint16_t[IN_SIZE / 2];
@@ -125,6 +124,7 @@ int halide_debayer()
 		return -1;
 	}
 
+	printf("IN %d x %d IN_SIZE %d IN_STRIDE %d \n", IN_WIDTH, IN_HEIGHT, IN_SIZE, IN_STRIDE);
 	Buffer<uint16_t> input(buf, IN_STRIDE / 2, IN_SIZE / IN_STRIDE);
 
 	Var x("x"), y("y"), c("c");
@@ -147,8 +147,8 @@ int halide_debayer()
 	Expr pady = clamp(y, 0, IN_HEIGHT - 1);
 
 	// Red channel
-	padded16(x, y) = cast<uint16_t>(input(padx, pady));
-	raw(x, y) = padded16(x, y);
+	// padded16(x, y) = cast<uint16_t>(input(padx, pady));
+	raw(x, y) = input(padx, pady);
 	red16(x, y) = select(
 		is_red, raw(x, y),
 		is_blue, (raw(x - 1, y - 1) + raw(x + 1, y - 1) + raw(x - 1, y + 1) + raw(x + 1, y + 1)) / 4,
@@ -169,6 +169,20 @@ int halide_debayer()
 
 	Func red("red"), green("green"), blue("blue");
 
+	RDom r(0, IN_WIDTH, 0, IN_HEIGHT);
+	Func sum_r, sum_g, sum_b;
+	sum_r() = cast<uint64_t>(0);
+	sum_g() = cast<uint64_t>(0);
+	sum_b() = cast<uint64_t>(0);
+
+	Expr is_r = (r.x % 2 == 0) && (r.y % 2 == 0);
+	Expr is_g = ((r.x + r.y) % 2 == 1);
+	Expr is_b = (r.x % 2 == 1) && (r.y % 2 == 1);
+
+	sum_r() += select(is_r, cast<uint64_t>(raw(r.x, r.y)), 0);
+	sum_g() += select(is_g, cast<uint64_t>(raw(r.x, r.y)), 0);
+	sum_b() += select(is_b, cast<uint64_t>(raw(r.x, r.y)), 0);
+
 	constexpr bool dynamic_lut = true;
 	if (dynamic_lut) {
 		Func lut;
@@ -182,8 +196,40 @@ int halide_debayer()
 		apply_static_lut(red, green, blue, red16, green16, blue16);
 	}
 
+	Func debayered("debayered");
+	debayered(x, y, c) = select(
+		c == 0, red(x, y),
+		c == 1, green(x, y),
+		c == 2, blue(x, y),
+		255);
+
+	// Scheduling (Optimize for parallel execution)
+
+	debayered.compute_root();
+	sum_r.compute_root();
+	sum_g.compute_root();
+	sum_b.compute_root();
+	debayered.parallel(y).vectorize(x, 16);
+
 	// Combine into final RGB image
-	combine_and_save_image(red, green, blue);
+	printf("OUT %d x %d OUT_SIZE %d OUT_STRIDE %d \n", OUT_WIDTH, OUT_HEIGHT, OUT_SIZE, OUT_STRIDE);
+	// Halide::Buffer<uint8_t> out = debayered.realize({ OUT_WIDTH, OUT_HEIGHT, 4 });
+	Halide::Buffer<uint8_t> out = debayered.realize({ IN_WIDTH, IN_HEIGHT, 4 });
+	// Halide::Buffer<uint8_t> out = debayered.realize({ STRIDE, SIZE / STRIDE });
+	Tools::save_image(out, "OUT_FRAME.png");
+
+	Halide::Buffer<uint64_t> sum_r_buf = sum_r.realize();
+	Halide::Buffer<uint64_t> sum_g_buf = sum_g.realize();
+	Halide::Buffer<uint64_t> sum_b_buf = sum_b.realize();
+
+	printf("SUM R %llu G %llu B %llu\n", (unsigned long long)sum_r_buf(0), (unsigned long long)sum_g_buf(0), (unsigned long long)sum_b_buf(0));
+
+	double sum_r_val = sum_r_buf(0);
+	double sum_g_val = sum_g_buf(0) / 2.0;
+	double sum_b_val = sum_b_buf(0);
+
+	printf("R %lf G %lf B %lf\n", sum_r_val / sum_g_val, 1.0, sum_b_val / sum_g_val);
+	// combine_and_save_image(red, green, blue);
 	return 0;
 }
 
