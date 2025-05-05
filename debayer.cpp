@@ -219,7 +219,8 @@ int halide_debayer()
 	sum_g.compute_root();
 	sum_b.compute_root();
 
-	debayered.parallel(y).vectorize(x, 16);
+	debayered.reorder(c, x, y).bound(c, 0, 4).unroll(c);
+	// debayered.parallel(y).vectorize(x, 16);
 
 	// Combine into final RGB image
 	printf("OUT %d x %d OUT_SIZE %d OUT_STRIDE %d \n", OUT_WIDTH, OUT_HEIGHT, OUT_SIZE, OUT_STRIDE);
