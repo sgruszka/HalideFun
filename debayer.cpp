@@ -2,6 +2,7 @@
 #include <fstream>
 #include <stdio.h>
 
+#include "halide_benchmark.h"
 #include "halide_image_io.h"
 
 using namespace Halide;
@@ -15,6 +16,14 @@ constexpr int OUT_SIZE = 8404032;
 constexpr int OUT_STRIDE = 7696;
 constexpr int OUT_WIDTH = OUT_STRIDE / 4;
 constexpr int OUT_HEIGHT = OUT_SIZE / OUT_STRIDE;
+
+inline double current_time()
+{
+	static auto start_time = Halide::Tools::benchmark_now().time_since_epoch();
+
+	auto now = Halide::Tools::benchmark_now().time_since_epoch() - start_time;
+	return std::chrono::duration_cast<std::chrono::microseconds>(now).count() / 1e3;
+}
 
 [[maybe_unused]]
 static void diffrent_patterns()
@@ -209,26 +218,33 @@ int halide_debayer()
 	sum_r.compute_root();
 	sum_g.compute_root();
 	sum_b.compute_root();
+
 	debayered.parallel(y).vectorize(x, 16);
 
 	// Combine into final RGB image
 	printf("OUT %d x %d OUT_SIZE %d OUT_STRIDE %d \n", OUT_WIDTH, OUT_HEIGHT, OUT_SIZE, OUT_STRIDE);
+	double t1 = current_time();
+
 	// Halide::Buffer<uint8_t> out = debayered.realize({ OUT_WIDTH, OUT_HEIGHT, 4 });
 	Halide::Buffer<uint8_t> out = debayered.realize({ IN_WIDTH, IN_HEIGHT, 4 });
-	// Halide::Buffer<uint8_t> out = debayered.realize({ STRIDE, SIZE / STRIDE });
-	Tools::save_image(out, "OUT_FRAME.png");
+
+	double t2 = current_time();
 
 	Halide::Buffer<uint64_t> sum_r_buf = sum_r.realize();
 	Halide::Buffer<uint64_t> sum_g_buf = sum_g.realize();
 	Halide::Buffer<uint64_t> sum_b_buf = sum_b.realize();
 
+	double t3 = current_time();
 	printf("SUM R %llu G %llu B %llu\n", (unsigned long long)sum_r_buf(0), (unsigned long long)sum_g_buf(0), (unsigned long long)sum_b_buf(0));
 
 	double sum_r_val = sum_r_buf(0);
 	double sum_g_val = sum_g_buf(0) / 2.0;
 	double sum_b_val = sum_b_buf(0);
 
+	printf("Debayering done in %1.4f ms sum done in %1.4f ms\n", (t2 - t1) / 100, (t3 - t2) / 100);
 	printf("R %lf G %lf B %lf\n", sum_r_val / sum_g_val, 1.0, sum_b_val / sum_g_val);
+
+	Tools::save_image(out, "OUT_FRAME.png");
 	// combine_and_save_image(red, green, blue);
 	return 0;
 }
