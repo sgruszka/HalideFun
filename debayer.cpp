@@ -125,7 +125,7 @@ int halide_debayer()
 	}
 
 	printf("IN %d x %d IN_SIZE %d IN_STRIDE %d \n", IN_WIDTH, IN_HEIGHT, IN_SIZE, IN_STRIDE);
-	Buffer<uint16_t> input(buf, IN_STRIDE / 2, IN_SIZE / IN_STRIDE);
+	Buffer<uint16_t> input(buf, IN_WIDTH, IN_HEIGHT);
 
 	Var x("x"), y("y"), c("c");
 	// GRGRGR..
