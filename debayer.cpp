@@ -193,10 +193,19 @@ int halide_debayer()
 	sum_b() += select(is_b, cast<uint64_t>(raw(r.x, r.y)), 0);
 
 	constexpr bool dynamic_lut = true;
+	constexpr float black_level = 16;
+	constexpr float divisor = 256 - black_level - 1.0f;
 	if (dynamic_lut) {
-		Func lut;
+		Func lut, gamma, gamma_clamped;
 		Var i;
-		lut(i) = cast<uint8_t>(clamp(pow(i / 256.0f, 0.5f) * 255.0f, 0, 255));
+
+		gamma(i) = pow((i - black_level) / divisor, 0.5f) * 255.0f;
+		gamma_clamped(i) = cast<uint8_t>(clamp(gamma(i), 0, 255));
+
+		// lut(i) = cast<uint8_t>(clamp(pow(i / 256.0f, 0.5f) * 255.0f, 0, 255));
+		// lut(i) = select(i < black_level, 0,
+		// cast<uint8_t>(clamp(gamma(i), 0, 255));
+		lut(i) = select(i < black_level, 0, gamma_clamped(i));
 
 		blue(x, y) = cast<uint8_t>(lut(blue16(x, y) / 4));
 		red(x, y) = cast<uint8_t>(lut(red16(x, y) / 4));
@@ -221,6 +230,7 @@ int halide_debayer()
 
 	debayered.reorder(c, x, y).bound(c, 0, 4).unroll(c);
 	// debayered.parallel(y).vectorize(x, 16);
+	// debayered.parallel(y);
 
 	// Combine into final RGB image
 	printf("OUT %d x %d OUT_SIZE %d OUT_STRIDE %d \n", OUT_WIDTH, OUT_HEIGHT, OUT_SIZE, OUT_STRIDE);
