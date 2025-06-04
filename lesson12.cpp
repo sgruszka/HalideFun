@@ -22,11 +22,12 @@ Target find_gpu_target()
 	Target target = get_host_target();
 
 	std::vector<Target::Feature> features_to_try;
+	// features_to_try.push_back(Target::Vulkan);
 	features_to_try.push_back(Target::OpenCL);
-	features_to_try.push_back(Target::Vulkan);
 
-	for (Target::Feature f : features_to_try) {
+	for (auto f : features_to_try) {
 		Target new_target = target.with_feature(f);
+		printf("Try no %d: %s\n", f, new_target.to_string().c_str());
 		if (host_supports_target_device(new_target)) {
 			printf("Found target %d %d %d\n", new_target.os, new_target.arch, new_target.has_gpu_feature());
 			return new_target;
@@ -56,9 +57,9 @@ public:
 		Target target = find_gpu_target();
 		assert(target.has_gpu_feature());
 
-		target.set_feature(Target::Debug);
-		target.set_feature(Target::VulkanInt8);
-		target.set_feature(Target::VulkanInt16);
+		// target.set_feature(Target::Debug);
+		// target.set_feature(Target::VulkanInt8);
+		// target.set_feature(Target::VulkanInt16);
 
 		brighter.gpu_tile(x, y, xo, yo, xi, yi, 16, 16);
 		// brighter.compile_jit(target);
@@ -85,6 +86,7 @@ class MyPipeline
 public:
 	Func lut, padded, padded16, sharpen, curved;
 	Buffer<uint8_t> input;
+	Target target;
 
 	MyPipeline(Buffer<uint8_t> in)
 		: input(in)
@@ -114,8 +116,6 @@ public:
 
 	void schedule_for_cpu()
 	{
-		Target target = get_host_target();
-
 		lut.compute_root();
 
 		// color channels innermost, mark there will be 3 of them and unroll
@@ -132,17 +132,17 @@ public:
 
 		padded.vectorize(x, 16);
 
-		printf("Target: %s\n", target.to_string().c_str());
+		target = get_host_target();
 		curved.compile_jit(target);
 	}
 
 	void scheudle_for_gpu()
 	{
-		Target target = find_gpu_target();
+		target = find_gpu_target();
 		assert(target.has_gpu_feature());
 		// target.set_feature(Target::Debug);
-		target.set_feature(Target::VulkanInt8);
-		target.set_feature(Target::VulkanInt16);
+		// target.set_feature(Target::VulkanInt8);
+		// target.set_feature(Target::VulkanInt16);
 
 		lut.compute_root();
 
@@ -159,7 +159,6 @@ public:
 		padded.compute_at(curved, xo);
 		padded.gpu_threads(x, y);
 
-		printf("Target: %s\n", target.to_string().c_str());
 		curved.compile_jit(target);
 	}
 };
@@ -209,7 +208,7 @@ void test_performance_grey(Brighter &p, const Buffer<uint8_t> &input)
 		for (int j = 0; j < 1000; j++)
 			p.brighter.realize(output);
 		// Force GPU to finish
-		// output.copy_to_host();
+		output.copy_to_host();
 		double t2 = current_time();
 
 		double elapsed = (t2 - t1) / 100;
@@ -233,8 +232,7 @@ int main()
 	Buffer<uint8_t> gpu_output_gray(input_gray.width(), input_gray.height());
 	Buffer<uint8_t> cpu_output_gray(input_gray.width(), input_gray.height());
 
-#if 0
-	printf("Running pipeline on CPU\n");
+#if 1
 	MyPipeline p1(input);
 	p1.schedule_for_cpu();
 	//p1.curved.realize(reference_output);
@@ -244,12 +242,12 @@ int main()
 	p2.scheudle_for_gpu();
 	//p2.curved.realize(gpu_output);
 	//save_image(gpu_output, "out_gpu_rbg.png");
-	
-	printf("Running pipeline on CPU\n");
+
+	printf("Running pipeline on CPU: %s\n", p1.target.to_string().c_str());
 	test_performance(p1, reference_output);
-	printf("Running pipeline on GPU\n");
+	printf("Running pipeline on GPU: %s\n", p2.target.to_string().c_str());
 	test_performance(p2, gpu_output);
-#endif
+#else
 
 	// Brighter b(input_gray, 10);
 	// b.schedule_for_gpu();
@@ -265,5 +263,6 @@ int main()
 	printf("Running gray pipeline on GPU\n");
 	b2.schedule_for_gpu();
 	test_performance_grey(b2, gpu_output_gray);
+#endif
 	return 0;
 }
