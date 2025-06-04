@@ -1,4 +1,4 @@
-P=/home/stasiu/halide-install/
+P=/home/stasiu/halide-install-main/
 
 SRCS := $(wildcard *.cpp)
 TGTS := $(SRCS:.cpp=)
