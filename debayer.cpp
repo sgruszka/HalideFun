@@ -139,10 +139,10 @@ int halide_debayer()
 	Var x("x"), y("y"), c("c");
 	// GRGRGR..
 	// BGBGBG..
-	Expr is_green1 = ((x % 2) == 0) && ((y % 2) == 0);
-	Expr is_red = ((x % 2) == 1) && ((y % 2) == 0);
-	Expr is_blue = ((x % 2) == 0) && ((y % 2) == 1);
-	Expr is_green2 = ((x % 2) == 1) && ((y % 2) == 1);
+	Expr is_green1 = ((x & 1) == 0) && ((y & 1) == 0);
+	Expr is_red = ((x & 1) == 1) && ((y & 1) == 0);
+	Expr is_blue = ((x & 1) == 0) && ((y & 1) == 1);
+	Expr is_green2 = ((x & 1) == 1) && ((y & 1) == 1);
 
 	// Interpolation for each color channel
 	Func red16("red16"), green16("green16"), blue16("blue16");
@@ -184,9 +184,9 @@ int halide_debayer()
 	sum_g() = cast<uint64_t>(0);
 	sum_b() = cast<uint64_t>(0);
 
-	Expr is_r = (r.x % 2 == 0) && (r.y % 2 == 0);
-	Expr is_g = ((r.x + r.y) % 2 == 1);
-	Expr is_b = (r.x % 2 == 1) && (r.y % 2 == 1);
+	Expr is_r = ((r.x & 1) == 0) && ((r.y & 1) == 0);
+	Expr is_g = (((r.x + r.y) & 1) == 1);
+	Expr is_b = ((r.x & 1) == 1) && ((r.y & 1) == 1);
 
 	sum_r() += select(is_r, cast<uint64_t>(raw(r.x, r.y)), 0);
 	sum_g() += select(is_g, cast<uint64_t>(raw(r.x, r.y)), 0);
