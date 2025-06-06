@@ -121,6 +121,28 @@ static void combine_and_save_image(Func r, Func g, Func b)
 	Tools::save_image(out, "OUT_FRAME.png"); */
 }
 
+Target find_gpu_target()
+{
+	// Start with a target suitable for the machine you're running this on.
+	Target target = get_host_target();
+
+	std::vector<Target::Feature> features_to_try;
+	// features_to_try.push_back(Target::Vulkan);
+	features_to_try.push_back(Target::OpenCL);
+
+	for (auto f : features_to_try) {
+		Target new_target = target.with_feature(f);
+		printf("Try no %d: %s\n", f, new_target.to_string().c_str());
+		if (host_supports_target_device(new_target)) {
+			printf("Found target %d %d %d\n", new_target.os, new_target.arch, new_target.has_gpu_feature());
+			return new_target;
+		}
+	}
+
+	fprintf(stderr, "Requested GPU(s) features are not supported.\n");
+	return target;
+}
+
 int halide_debayer()
 {
 	std::ifstream inputFile("images/INPUT_FRAME", std::ios::in | std::ios::binary);
@@ -179,7 +201,7 @@ int halide_debayer()
 	Func red("red"), green("green"), blue("blue");
 
 	RDom r(0, IN_WIDTH, 0, IN_HEIGHT);
-	Func sum_r, sum_g, sum_b;
+	Func sum_r("sum_r"), sum_g("sum_g"), sum_b("sum_b");
 	sum_r() = cast<uint64_t>(0);
 	sum_g() = cast<uint64_t>(0);
 	sum_b() = cast<uint64_t>(0);
@@ -192,14 +214,24 @@ int halide_debayer()
 	sum_g() += select(is_g, cast<uint64_t>(raw(r.x, r.y)), 0);
 	sum_b() += select(is_b, cast<uint64_t>(raw(r.x, r.y)), 0);
 
-	// sum_r.compute_root();
-	// sum_g.compute_root();
-	// sum_b.compute_root();
+	// Var x_outer, x_inner;
+	// raw.split(r.x, x_outer, x_inner, 16);
+	// raw.vectorize(x_inner);
+	sum_g.update().compute_with(sum_r.update(), r.x);
+	sum_b.update().compute_with(sum_r.update(), r.x);
+
 	double t1 = current_time();
 
-	Halide::Buffer<uint64_t> sum_r_buf = sum_r.realize();
-	Halide::Buffer<uint64_t> sum_g_buf = sum_g.realize();
-	Halide::Buffer<uint64_t> sum_b_buf = sum_b.realize();
+	Pipeline({ sum_r, sum_g, sum_b }).print_loop_nest();
+	Realization sums = Pipeline({ sum_r, sum_g, sum_b }).realize();
+
+	// Halide::Buffer<uint64_t> sum_r_buf = sum_r.realize();
+	// Halide::Buffer<uint64_t> sum_g_buf = sum_g.realize();
+	// Halide::Buffer<uint64_t> sum_b_buf = sum_b.realize();
+	Halide::Buffer<uint64_t> sum_r_buf = sums[0];
+	Halide::Buffer<uint64_t> sum_g_buf = sums[1];
+	Halide::Buffer<uint64_t> sum_b_buf = sums[2];
+
 	printf("SUMS: R %llu G %llu B %llu\n", (unsigned long long)sum_r_buf(0), (unsigned long long)sum_g_buf(0), (unsigned long long)sum_b_buf(0));
 
 	float sum_r_val = sum_r_buf(0);
@@ -228,6 +260,9 @@ int halide_debayer()
 		lut_b(i) = lut(cast<uint8_t>(min(i * gain_b, 255)));
 		lut_g(i) = lut(i);
 		lut_r(i) = lut(cast<uint8_t>(min(i * gain_r, 255)));
+		lut_b.compute_root();
+		lut_g.compute_root();
+		lut_r.compute_root();
 
 		blue(x, y) = cast<uint8_t>(lut_b(blue16(x, y) / 4));
 		red(x, y) = cast<uint8_t>(lut_r(red16(x, y) / 4));
@@ -244,13 +279,33 @@ int halide_debayer()
 		c == 2, blue(x, y),
 		255);
 
-	// Scheduling (Optimize for parallel execution)
-
-	debayered.compute_root();
+	// debayered.print_loop_nest();
 
 	debayered.reorder(c, x, y).bound(c, 0, 4).unroll(c);
-	// debayered.parallel(y).vectorize(x, 16);
-	// debayered.parallel(y);
+
+	constexpr bool run_on_gpu = true;
+	Target target;
+	if (run_on_gpu) {
+		Var xi, yi, xo, yo;
+		debayered.gpu_tile(x, y, xo, yo, xi, yi, 16, 16);
+		blue.compute_at(debayered, xo);
+		blue.gpu_threads(x, y);
+		green.compute_at(debayered, xo);
+		green.gpu_threads(x, y);
+		red.compute_at(debayered, xo);
+		red.gpu_threads(x, y);
+
+		target = find_gpu_target();
+		assert(target.has_gpu_feature());
+	} else {
+		target = get_host_target();
+		debayered.parallel(y).vectorize(x, 16);
+	}
+
+	debayered.compile_jit(target);
+
+	double t3 = current_time();
+	// debayered.compute_root();
 
 	// Combine into final RGB image
 	printf("OUT %d x %d OUT_SIZE %d OUT_STRIDE %d \n", OUT_WIDTH, OUT_HEIGHT, OUT_SIZE, OUT_STRIDE);
@@ -258,13 +313,16 @@ int halide_debayer()
 	// Halide::Buffer<uint8_t> out = debayered.realize({ OUT_WIDTH, OUT_HEIGHT, 4 });
 	Halide::Buffer<uint8_t> out = debayered.realize({ IN_WIDTH, IN_HEIGHT, 4 });
 
-	double t3 = current_time();
+	if (run_on_gpu)
+		out.copy_to_host();
+
+	double t4 = current_time();
 
 	// double sum_r_val = sum_r_buf(0);
 	// double sum_g_val = sum_g_buf(0) / 2.0;
 	// double sum_b_val = sum_b_buf(0);
 
-	printf("Sums done in %1.4f ms debayering done in %1.4f ms\n", (t2 - t1) / 100, (t3 - t2) / 100);
+	printf("Sums done in %1.4f ms JIT done %1.4f debayering done in %1.4f ms\n", (t2 - t1) / 100, (t3 - t2) / 100, (t4 - t3) / 100);
 
 	Tools::save_image(out, "OUT_FRAME.png");
 	// combine_and_save_image(red, green, blue);
